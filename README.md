@@ -37,7 +37,7 @@ ChIPseq_project/
 fastp   -i input/SRR28865860_1.fastq   -I input/SRR28865860_2.fastq   -o cleaned/SRR28865860_1.trim.fastq   -O cleaned/SRR28865860_2.trim.fastq   --detect_adapter_for_pe   --thread 8   --html SRR28865860_fastp.html   --json SRR28865860_fastp.json
 ```
 
-### 2. Alignment with BWA and BAM cleanup
+### 2. Alignment with BWA and convert SAM → BAM and fix mates / remove duplicates
 ```bash
 # Index genome
 bwa index genome.fa
@@ -45,19 +45,38 @@ bwa index genome.fa
 # Align
 bwa mem -t 8 genome.fa SRR28865860_1.trim.fastq SRR28865860_2.trim.fastq > SRR28865860.sam
 
-# Convert SAM to BAM
-samtools view -Sb SRR28865860.sam | samtools sort -o SRR28865860.sorted.bam
+# 1) Convert SAM to name-sorted BAM
+samtools sort -n -@ 8 -o SRR28865860.name_sorted.bam SRR28865860.sam
 
-# Add mate info and mark duplicates
-samtools fixmate -m SRR28865860.sorted.bam SRR28865860.fixmate.bam
-samtools sort -o SRR28865860.positionsorted.bam SRR28865860.fixmate.bam
+# 2) Add mate information
+samtools fixmate -m SRR28865860.name_sorted.bam SRR28865860.fixmate.bam
+
+# 3) Sort by genomic position
+samtools sort -@ 8 -o SRR28865860.positionsorted.bam SRR28865860.fixmate.bam
+
+# 4) Mark and remove duplicates
 samtools markdup -r SRR28865860.positionsorted.bam SRR28865860.dedup.bam
+
+# 5) Index final BAM
 samtools index SRR28865860.dedup.bam
+
+# Move into aligned/ directory
+mv SRR28865860.dedup.bam SRR28865860.dedup.bam.bai aligned/
+
 ```
 
 ### 3. Peak Calling with `MACS3`
 ```bash
-macs3 callpeak   -t aligned/SRR28865737.dedup.bam   -c input/aligned/SRR28865860.dedup.bam   -f BAMPE   --broad   --broad-cutoff 0.1   -g 2.25e8   -n SRR28865737_H3K27ac   --outdir peaks/
+macs3 callpeak \
+  -t aligned/SRR28865737.dedup.bam \
+  -c aligned/SRR28865860.dedup.bam \
+  -f BAMPE \
+  -g 2.25e8 \
+  -n SRR28865737_H3K27ac \
+  --outdir peaks/ \
+  -q 0.01
+
+# 💡 If you intentionally want broad “domains” for H3K27ac, you could use --broad, but for canonical H3K27ac analysis, narrow peaks are standard.
 ```
 
 ### 4. Signal Track Generation (bigWig)
@@ -80,8 +99,8 @@ bamCoverage   -b aligned/SRR28865737.dedup.bam   -o bigwig/SRR28865737_H3K27ac.b
 library(ChIPseeker)
 library(GenomicFeatures)
 
-txdb <- makeTxDbFromGFF("Amel_4.5.gff3", format="gff3")
-peakfile <- "peaks/SRR28865737_H3K27ac_peaks.broadPeak"
+txdb <- makeTxDbFromGFF("Amel_4.5.gff3", format="gff3") #Read the gff3/gtf file of the genome
+peakfile <- "peaks/SRR28865737_H3K27ac_peaks.broadPeak" #Read the 
 
 peak_anno <- annotatePeak(
   peakfile,
